@@ -26,15 +26,10 @@ while read -r a b c d e f g h i; do
 #SBATCH --job-name=submit/myjob_${i}
 #SBATCH --error=error/myjob_${i}.err
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
 #SBATCH -A raiselab
-#SBATCH --time=1-12
+#SBATCH --time=1-16
 #SBATCH --gres=gpu:1
 #SBATCH --partition="gpu"
-
-# Add Conda environment paths to PATH and LD_LIBRARY_PATH
-# export PATH="$conda_env_path/bin:\$PATH"
-# export LD_LIBRARY_PATH="$conda_env_path/lib:\$LD_LIBRARY_PATH"
 
 
 ################################################################################################ 

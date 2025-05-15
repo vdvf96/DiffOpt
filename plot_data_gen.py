@@ -69,7 +69,9 @@ A_numpy = tmp.numpy()
 tmp2 = (tmp * dataset.x).sum(dim=1)
 tmp3 = tmp2 - b_perturbed.squeeze()
 
-X_hat = np.load(f'samples/samples_{args.id_script}_longEpochs.npy')
+#X_hat = np.load(f'samples/samples_{args.id_script}_longEpochs.npy')
+
+X_hat = np.load(f'allSamples/{folder}/samples_{args.id_script}.npy')[-1,:,:]
 
 X1_hat = X_hat[:,0]
 X2_hat = X_hat[:,1]
@@ -108,7 +110,7 @@ plt.ylabel('y')
 plt.legend()
 plt.grid(True)
 #plt.axis('equal')  # optional: keeps aspect ratio square
-plt.savefig(f'plot/data/viol/longEpochs/viol_{args.id_script}.png')
+plt.savefig(f'plot/data/{folder}/longEpochs/viol_{args.id_script}.png')
 
 
 # 0.5 * cp.quad_form(x, Q) + P.T @ x
@@ -128,7 +130,7 @@ print(np.mean(gap))
 print(np.max(gap))
 log_gap = np.log10(gap + 1e-6)
 
-plt.figure(figsize=(8, 6))
+plt.figure(figsize=(8, 8))
 sc = plt.scatter(X1_hat, X2_hat, c=log_gap, cmap='plasma', s=15, alpha=0.8, marker='x')
 
 # Colorbar with custom ticks showing % values
@@ -142,7 +144,7 @@ plt.ylabel('y')
 plt.title('Generated Samples Colored by log Optimality Gap')
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(f'plot/data/gap/longEpochs/log_gap_{args.id_script}.png', dpi=300)
+plt.savefig(f'plot/data/{folder}/longEpochs/log_gap_{args.id_script}.png', dpi=300)
 plt.show()
 
 '''

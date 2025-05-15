@@ -36,6 +36,7 @@ parser.add_argument("--seed", type=int, default=2, help="Random seed")
 parser.add_argument("--optimizer", type=int, default=2, help="Random seed")
 parser.add_argument("--activation", type=int, default=0, help="Random seed")
 parser.add_argument("--id", type=int, default=20, help="Hidden units of the model")
+parser.add_argument("--lambdA", type=float, default=.5, help="Multiplier for infeasiblity of reconstructed solution")
 
 parser.add_argument("--sigma_min", type=float, default=0.005, help="Sigma min of Langevin dynamic")
 parser.add_argument("--sigma_max", type=float, default=10., help="Sigma max of Langevin dynamic")
@@ -50,7 +51,9 @@ parser.add_argument("--run_name", type=str, default='train', help="Run name for 
 # Projection parameters
 
 args = parser.parse_args()
-device = torch.device('cpu') #torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+
+print(device)
 
 seed = args.seed
 def set_seed(seed: int = 42):
@@ -77,10 +80,20 @@ test_data_path = f'data/{folder}/test_data_qp.csv'
 dataset = QPDataset(test_data_path)
 test_dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
+A_perturbed = dataset.A_perturbed
+b_perturbed = dataset.b_perturbed
+
+A_unperturbed = torch.ones_like(A_perturbed) * 0.5427325452178637
+b_unperturbed = torch.ones_like(A_perturbed) *-0.7599301066980018
+
+X1 = dataset.x[:,0]
+X2 = dataset.x[:,1]
+
+tmp = torch.stack((A_unperturbed, A_perturbed), dim=1).squeeze()
+A_stack = tmp.numpy()
+
 
 n_output = 2
-is_y_cond=True
-
 if args.conditioning_type == 0:
     n_input = 2
 elif args.conditioning_type == 1:
@@ -97,9 +110,7 @@ elif args.activation == 1:
 elif args.activation == 2:
     act = nn.SiLU
 
-
 ### DEFINE MODEL
-
 
 model = FF([n_input,args.hidden_units,2], activation=act).to(device = device)
 
@@ -113,17 +124,19 @@ elif args.optimizer == 2:
     optimizer = optim.RMSprop(model.parameters(), lr=args.lr)
 #optimizer = optim.AdamW(model.parameters(), lr=args.lr)
 
+lambdA = args.lambdA
 
 epochs = args.max_epochs
 patience = 0
 max_patience = 1000
 
 min_loss = float('inf')
-sigma_max = 0.005
-sigma_min = 10
+sigma_max = 10
+sigma_min = 0.005
 n_steps = 10
 # sigmas = np.linspace(sigma_max, sigma_min, L, dtype=np.float32)
 sigmas = torch.exp(torch.linspace(start=math.log(sigma_max), end=math.log(sigma_min), steps = n_steps)).to(device = device)
+print(sigmas)
 epoch_loss = []
 valid_loss_list = []
 test_loss = 0
@@ -143,7 +156,7 @@ test_loss = 0
 ### LOSS FUNCTION (WEIGHTED BY NOISE LEVEL OR NOT) - LET'S SEE IF NEEDED
 ### OPTIMIZER (ADAM, SGD, RMSPROP) - DONE
 ### POSSIBLY DATA GEN - LET'S SEE IF NEEDED
-### DATA NORMALIZATION - TO DO
+### DATA NORMALIZATION - DONE 
 ### VARIOUS CONDITIONING - DONE
 ###
 ### PROBLEM STRUCTURE
@@ -156,9 +169,11 @@ test_loss = 0
 def min_max_normalize(t):
     return (t - t.min(dim=0, keepdim=True).values) / (t.max(dim=0, keepdim=True).values - t.min(dim=0, keepdim=True).values + 1e-8)
 
+
+
 for epoch in range(epochs):
     running_loss = 0.0
-    print('='* 80)
+    #print('='* 80)
     iteration = 0 
     model.train()
     for x, y in dataloader:
@@ -173,9 +188,10 @@ for epoch in range(epochs):
         chosen_sigmas = sigmas[idx] # shape (batch, 1)
         noise = torch.randn_like(x, device=device)
         x_tilde = x + chosen_sigmas * noise
-        #target_score = (x - x_tilde) / (chosen_sigmas**2)
+
+        #target_score = (x - x_tilde) / (chosen_sigmas**2) ## SCORE (gradient log pdf) OF A GAUSSIAN random variable
         target_score = -1/(chosen_sigmas) * noise # same thing as above expression 
-        
+
         #pred_score = model(x_tilde, idx , y) ### NOISE AND PROBLEM PARAEMTERS CONDITIONING
         #pred_score = model(x_tilde, idx)  ### NOISE CONDITIONING
 
@@ -185,11 +201,27 @@ for epoch in range(epochs):
             x_in = torch.cat([x_tilde, idx], dim = 1)
         elif args.conditioning_type == 2:
             x_in = torch.cat([x_tilde, idx, y], dim = 1)
-        
+
         pred_score = model(x_in) ### NO CONDITIONING
+
+        # === Main score-matching loss ===
+        score_loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+
+        # === Reconstruct x_hat from score ===
+        x_hat = x_tilde + (chosen_sigmas**2) * pred_score  # shape: (batch, 2)
+
+        # === Feasibility constraint violation ===
+        Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
+        violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
+
+        # === Feasibility penalty (e.g. mean or squared violation) ===
+        penalty = violation.mean()  # or .square().mean() for stronger penalty
+
+        # === Total loss ===
+        # weight of the penalty term
+        loss = score_loss + lambdA * penalty
         
-        # loss = (pred_score - target_score).square().mean()
-        loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+        #loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -201,7 +233,7 @@ for epoch in range(epochs):
     avg_loss = running_loss / len(dataset)
     epoch_loss.append(avg_loss)
     if epoch % 1 ==0: 
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
+        #print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
         model.eval()
         with torch.no_grad():
             for x, y in valid_dataloader:
@@ -228,29 +260,43 @@ for epoch in range(epochs):
                     x_in = torch.cat([x_tilde, idx], dim = 1)
                 elif args.conditioning_type == 2:
                     x_in = torch.cat([x_tilde, idx, y], dim = 1)
-                
                 pred_score = model(x_in) ### NO CONDITIONING
                 # loss = (pred_score - target_score).square().mean()
-                loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+                # === Main score-matching loss ===
+                score_loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+
+                # === Reconstruct x_hat from score ===
+                x_hat = x_tilde + (chosen_sigmas**2) * pred_score  # shape: (batch, 2)
+
+                # === Feasibility constraint violation ===
+                Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
+                violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
+
+                # === Feasibility penalty (e.g. mean or squared violation) ===
+                penalty = violation.mean()  # or .square().mean() for stronger penalty
+
+                # === Total loss ===
+                # weight of the penalty term
+                loss = score_loss + lambdA * penalty
                 valid_loss = loss.item()
 
             if valid_loss<min_loss:
                 min_loss = valid_loss
-                print('Saving model...')
-                torch.save(model.state_dict(), f'./models/{folder}/model_{args.id}_norm.pt')
-                print('Model saved.')
+                #print('Saving model...')
+                torch.save(model.state_dict(), f'./models/{folder}/model_{args.id}.pt')
+                #print('Model saved.')
                 patience = 0
             else:
                 patience += 1
-            if patience == max:
-                print('Early stopping...')
+            if patience == max_patience:
+                #print('Early stopping...')
                 break
             valid_loss_list.append(valid_loss)
 
-np.save(f'loss/{folder}/valid_loss_list_{args.id}_norm.npy', valid_loss_list)  
-np.save(f'loss/{folder}/train_loss_list_{args.id}_norm.npy', epoch_loss)
+np.save(f'loss/{folder}/valid_loss_list_{args.id}.npy', valid_loss_list)  
+np.save(f'loss/{folder}/train_loss_list_{args.id}.npy', epoch_loss)
 
-model.load_state_dict(torch.load(f'./models/{folder}/model_{args.id}_norm.pt'))
+model.load_state_dict(torch.load(f'./models/{folder}/model_{args.id}.pt'))
 model.eval()
 
 for x, y in test_dataloader:
@@ -277,10 +323,9 @@ for x, y in test_dataloader:
         x_in = torch.cat([x_tilde, idx], dim = 1)
     elif args.conditioning_type == 2:
         x_in = torch.cat([x_tilde, idx, y], dim = 1)
-    
     pred_score = model(x_in) ### NO CONDITIONING
     # loss = (pred_score - target_score).square().mean()
-    loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+    loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2 ).mean()
     test_loss = loss.item()
 
 record = {
@@ -289,7 +334,7 @@ record = {
 }
 
 df = pd.DataFrame(record)
-df.to_csv('MLP_DENOISER_TEST_LOSS_LONG_EPOCHS_AND NORMALIZE.csv',mode='a', header=False, index=False)
+df.to_csv('MLP_DENOISER_TEST_LOSS_LONG_EPOCHS_DIFFICULT_DATA.csv',mode='a', header=False, index=False)
 
 # df_res = pd.DataFrame({'train_epoch_loss':epoch_loss})
 # df_res.to_csv('diffusion_mlpadvanced_100k.csv', index=False)

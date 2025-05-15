@@ -1,3 +1,4 @@
+cuda:0
 FF(
   (net): Sequential(
     (0): Linear(in_features=5, out_features=16, bias=True)
