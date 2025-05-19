@@ -1,0 +1,2 @@
+This repo contains the code that performs the training and sampling step of a score-based diffusion model on an underlying constrained optimization task.
+The main scripts within this repo are 'diffusion_scorebased_model', which trains the model in a supervised fashion and uses an early stopping criteria, 'sampling' and 'sampling_step_by_step' which perform the sampling steps of a saved diffusion model - the former saves only the final samples while the latter all the samples generated throughout the sampling process.
