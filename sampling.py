@@ -19,12 +19,12 @@ def projectOntoFeasibleSet(X, A, b):
     for each row individually.
 
     Args:
-        X (np.ndarray): Array of shape (n, k), n points of dimension k
-        A (np.ndarray): Constraint matrix of shape (m, k)
-        b (np.ndarray): Constraint vector of shape (m,)
+        X  Array of shape (n, k), n points of dimension k
+        A  Constraint matrix of shape (k)
+        b  Constraint vector of shape (1)
 
     Returns:
-        np.ndarray: Projected points of shape (n, k)
+        Z_projected Projected points of shape (n, k)
     """
     n, k = X.shape
     Z_projected = np.zeros_like(X)
@@ -43,6 +43,11 @@ def projectOntoFeasibleSet(X, A, b):
         Z_projected[i] = z.value
 
     return Z_projected
+
+
+def objective(x, Q, p):
+    return .5* x @ Q @ x + p @ x
+
 
 # Parse args
 parser = argparse.ArgumentParser()
@@ -108,6 +113,7 @@ test_dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
 A_perturbed = dataset.A_perturbed
 b_perturbed = dataset.b_perturbed
+#Q_perturbed = dataset.
 
 A_unperturbed = torch.ones_like(A_perturbed) * 0.5427325452178637
 
@@ -174,6 +180,7 @@ def sample_vectors(model, sigmas, n_steps, n_samples=1000, k=2, conditioning=Non
             elif conditioning_type == 2:
                 x_in = torch.cat([x, idx*torch.ones(x.shape[0]).unsqueeze(-1), y], dim=1)
             grad = model(x_in)
+            x.requires_grad_(True)
             x = x + 0.5 * step_size[idx] * grad + torch.sqrt(step_size[idx]) * z  # Langevin step
 
             ### project into feasible set here

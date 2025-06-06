@@ -50,18 +50,25 @@ parser.add_argument("--run_name", type=str, default='train', help="Run name for 
 args = parser.parse_args()
 device = torch.device('cpu') #torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-folder = 'easy_Data'
-test_data_path = f'data/{folder}/test_data_qp.csv'
+folder = 'new_data'
+test_data_path = f'{folder}/test_data_qp.csv'
 dataset = QPDataset(test_data_path)
 test_dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
 # Pre-stack A and b once
 A_perturbed   = dataset.A_perturbed[:100]                # (batch, 2)
-A_unperturbed = torch.ones_like(A_perturbed) * 0.5427325452178637
+A_unperturbed = torch.ones_like(A_perturbed) * 1.2100779822701702 #0.5427325452178637
 b_perturbed   = dataset.b_perturbed.squeeze()[:100]       # (batch,)
 A_stack       = torch.stack((A_unperturbed, A_perturbed), dim=1).squeeze()[:100]  # (batch, 2)
-Q = [[2,0],[0,3]]
-P = [1,1]
+Q = [[0,31173912564542305],[0,3]]
+P = [1,0.08736150635077833]
+
+#Q,P,A_base,b_base
+#"[[0.31173912564542305, 0.0], [0.0, 3.0]]","[1.0, 0.08736150635077833]","[[-0.37039263882966883, 1.2100779822701702]]",[-0.6277599050453051]
+
+#Q,P,A_base,b_base
+#[[-0.37039263882966883, 1.2100779822701702]]",[-0.6277599050453051]
+# Q[0,0], p[1], A[0,1], b
 
 def make_gif_sample_with_constraints(
     X_hat: np.ndarray,
