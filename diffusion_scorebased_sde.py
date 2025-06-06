@@ -5,13 +5,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from dataloader import QPDataset
+from dataloader import QPDataset, QPDatasetExtended
 from model import MLPDenoiser, TransformerDenoiserPlus, MLPDiffusion, FF
 #import matplotlib.pyplot as plt
 import random
 from torch.utils.data import DataLoader
 import argparse
-
 
 # Parse args
 parser = argparse.ArgumentParser()
@@ -28,7 +27,6 @@ parser.add_argument("--max_epochs", type=int, default=300000, help="Random seed"
 parser.add_argument("--conditioning_type", type=int, default=2, help="Random seed")
 # Model parameters
 parser.add_argument("--eps", type=float, default=1.5e-5, help="Epsilon of step size")
-
 parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate")
 parser.add_argument("--hidden_units", type=int, default=20, help="Hidden units of the model")
 parser.add_argument("--n_layers", type=int, default=2, help="Random seed")
@@ -36,14 +34,12 @@ parser.add_argument("--seed", type=int, default=2, help="Random seed")
 parser.add_argument("--optimizer", type=int, default=2, help="Random seed")
 parser.add_argument("--activation", type=int, default=0, help="Random seed")
 parser.add_argument("--id", type=int, default=20, help="Hidden units of the model")
-parser.add_argument("--lambdA", type=float, default=.5, help="Multiplier for infeasiblity of reconstructed solution")
-
+parser.add_argument("--lambdA", type=float, default=0, help="Multiplier for infeasiblity of reconstructed solution")
 parser.add_argument("--sigma_min", type=float, default=0.005, help="Sigma min of Langevin dynamic")
 parser.add_argument("--sigma_max", type=float, default=10., help="Sigma max of Langevin dynamic")
 parser.add_argument("--n_steps", type=int, default=10, help="Langevin steps")
 parser.add_argument("--annealed_step", type=int, default=25, help="Annealed steps")
 parser.add_argument("--normalize", type=int, default=0, help="Data normalization")
-
 # Training parameters
 parser.add_argument("--total_iteration", type=int, default=3000, help="Total training iterations")
 parser.add_argument("--display_iteration", type=int, default=150, help="Logging frequency")
@@ -65,41 +61,44 @@ def set_seed(seed: int = 42):
 
 # DEFINE DATALOADERS
 
-folder = 'difficult_Data'
+folder = 'new_data'
 
-train_data_path = f'data/{folder}/train_data_qp.csv'
-dataset = QPDataset(train_data_path)
+#train_data_path = f'data/{folder}/train_data_qp.csv'
+train_data_path = f'new_data/train_data_qp.csv'
+dataset = QPDatasetExtended(train_data_path)
 dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
-valid_data_path = f'data/{folder}/val_data_qp.csv'
-dataset = QPDataset(valid_data_path)
+#valid_data_path = f'data/{folder}/val_data_qp.csv'
+valid_data_path = f'new_data/val_data_qp.csv'
+dataset = QPDatasetExtended(valid_data_path)
 valid_dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
 
-test_data_path = f'data/{folder}/test_data_qp.csv'
-dataset = QPDataset(test_data_path)
+#test_data_path = f'new_data/{folder}/test_data_qp.csv'
+test_data_path = f'new_data/test_data_qp.csv'
+dataset = QPDatasetExtended(test_data_path)
 test_dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
 A_perturbed = dataset.A_perturbed
 b_perturbed = dataset.b_perturbed
 
-A_unperturbed = torch.ones_like(A_perturbed) * 0.5427325452178637
-b_unperturbed = torch.ones_like(A_perturbed) *-0.7599301066980018
+A_unperturbed = torch.ones_like(A_perturbed) * -2.460250124997068
+b_unperturbed = torch.ones_like(A_perturbed) * 0.2710735895465976
 
 X1 = dataset.x[:,0]
 X2 = dataset.x[:,1]
 
 tmp = torch.stack((A_unperturbed, A_perturbed), dim=1).squeeze()
-A_stack = tmp.numpy()
+A_stack = tmp#.numpy()
 
 
 n_output = 2
 if args.conditioning_type == 0:
     n_input = 2
 elif args.conditioning_type == 1:
-    n_input = 3
-else:
     n_input = 5
+else:
+    n_input = 7 ### x_input = (optimal_solution, a, b, q, p, noise_level)
 
 layer_dims = [n_input] + [args.hidden_units] * args.n_layers + [n_output]
 
@@ -131,8 +130,8 @@ patience = 0
 max_patience = 1000
 
 min_loss = float('inf')
-sigma_max = 10
-sigma_min = 0.005
+sigma_max = args.sigma_max
+sigma_min = args.sigma_min
 n_steps = 10
 # sigmas = np.linspace(sigma_max, sigma_min, L, dtype=np.float32)
 sigmas = torch.exp(torch.linspace(start=math.log(sigma_max), end=math.log(sigma_min), steps = n_steps)).to(device = device)
@@ -169,8 +168,6 @@ test_loss = 0
 def min_max_normalize(t):
     return (t - t.min(dim=0, keepdim=True).values) / (t.max(dim=0, keepdim=True).values - t.min(dim=0, keepdim=True).values + 1e-8)
 
-
-
 for epoch in range(epochs):
     running_loss = 0.0
     #print('='* 80)
@@ -198,28 +195,28 @@ for epoch in range(epochs):
         if args.conditioning_type == 0:
             x_in = x_tilde
         elif args.conditioning_type == 1:
-            x_in = torch.cat([x_tilde, idx], dim = 1)
+            x_in = torch.cat([x_tilde, idx, y[:,2:]], dim = 1)
         elif args.conditioning_type == 2:
             x_in = torch.cat([x_tilde, idx, y], dim = 1)
 
         pred_score = model(x_in) ### NO CONDITIONING
 
         # === Main score-matching loss ===
-        score_loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+        loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
 
         # === Reconstruct x_hat from score ===
         x_hat = x_tilde + (chosen_sigmas**2) * pred_score  # shape: (batch, 2)
 
         # === Feasibility constraint violation ===
-        Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
-        violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
+        #Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
+        #violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
 
         # === Feasibility penalty (e.g. mean or squared violation) ===
-        penalty = violation.mean()  # or .square().mean() for stronger penalty
+        #penalty = violation.mean()  # or .square().mean() for stronger penalty
 
         # === Total loss ===
         # weight of the penalty term
-        loss = score_loss + lambdA * penalty
+        #loss = score_loss + lambdA * penalty
         
         #loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
         optimizer.zero_grad()
@@ -257,27 +254,27 @@ for epoch in range(epochs):
                 if args.conditioning_type == 0:
                     x_in = x_tilde
                 elif args.conditioning_type == 1:
-                    x_in = torch.cat([x_tilde, idx], dim = 1)
+                    x_in = torch.cat([x_tilde, idx, y[:,2:]], dim = 1)
                 elif args.conditioning_type == 2:
                     x_in = torch.cat([x_tilde, idx, y], dim = 1)
                 pred_score = model(x_in) ### NO CONDITIONING
                 # loss = (pred_score - target_score).square().mean()
                 # === Main score-matching loss ===
-                score_loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
+                loss = (torch.square(target_score - pred_score).mean(-1) * chosen_sigmas**2).mean()
 
                 # === Reconstruct x_hat from score ===
                 x_hat = x_tilde + (chosen_sigmas**2) * pred_score  # shape: (batch, 2)
 
                 # === Feasibility constraint violation ===
-                Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
-                violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
+                #Ax_minus_b = (A_stack * x_hat).sum(dim=1) - b_perturbed.squeeze()
+                #violation = torch.relu(Ax_minus_b)  # only positive parts (violations)
 
                 # === Feasibility penalty (e.g. mean or squared violation) ===
-                penalty = violation.mean()  # or .square().mean() for stronger penalty
+                #penalty = violation.mean()  # or .square().mean() for stronger penalty
 
                 # === Total loss ===
                 # weight of the penalty term
-                loss = score_loss + lambdA * penalty
+                #loss = score_loss + lambdA * penalty
                 valid_loss = loss.item()
 
             if valid_loss<min_loss:
@@ -320,7 +317,7 @@ for x, y in test_dataloader:
     if args.conditioning_type == 0:
         x_in = x_tilde
     elif args.conditioning_type == 1:
-        x_in = torch.cat([x_tilde, idx], dim = 1)
+        x_in = torch.cat([x_tilde, idx, y[:,2:]], dim = 1)
     elif args.conditioning_type == 2:
         x_in = torch.cat([x_tilde, idx, y], dim = 1)
     pred_score = model(x_in) ### NO CONDITIONING
@@ -334,7 +331,7 @@ record = {
 }
 
 df = pd.DataFrame(record)
-df.to_csv('MLP_DENOISER_TEST_LOSS_LONG_EPOCHS_DIFFICULT_DATA.csv',mode='a', header=False, index=False)
+df.to_csv(f'MLP_DENOISER_TEST_LOSS_{folder}.csv',mode='a', header=False, index=False)
 
 # df_res = pd.DataFrame({'train_epoch_loss':epoch_loss})
 # df_res.to_csv('diffusion_mlpadvanced_100k.csv', index=False)

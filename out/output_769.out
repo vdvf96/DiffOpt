@@ -1,0 +1,10 @@
+cpu
+FF(
+  (net): Sequential(
+    (0): Linear(in_features=5, out_features=16, bias=True)
+    (1): Tanh()
+    (2): Linear(in_features=16, out_features=2, bias=True)
+  )
+)
+tensor([0.5000, 0.3237, 0.2096, 0.1357, 0.0879, 0.0569, 0.0368, 0.0239, 0.0154,
+        0.0100])
